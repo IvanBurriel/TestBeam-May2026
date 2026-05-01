@@ -1,0 +1,346 @@
+{
+  "annotations": [
+    {
+      "kind": "AnnotationQuery",
+      "spec": {
+        "builtIn": true,
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "query": {
+          "datasource": {
+            "name": "-- Grafana --"
+          },
+          "group": "grafana",
+          "kind": "DataQuery",
+          "spec": {},
+          "version": "v0"
+        }
+      }
+    }
+  ],
+  "cursorSync": "Off",
+  "editable": true,
+  "elements": {
+    "panel-2": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {
+                      "name": "dfknm2xrwl05cd"
+                    },
+                    "group": "influxdb",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "query": "from(bucket: \"Digitiser_bucket_abs\")\n  |> range(start: 0)\n  |> filter(fn: (r) =>\n    r.run == \"${run}\" and\n    r.acq_id == \"${acq_id}\" and\n    r.channel == \"${channel}\" and\n    r.event =~ /^${event:regex}$/ and\n    (r._field == \"ADC\" or r._field == \"sample\")\n  )\n  |> pivot(\n      rowKey: [\"_time\", \"event\"],\n      columnKey: [\"_field\"],\n      valueColumn: \"_value\"\n  )\n  |> group(columns: [])\n"
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {
+              "maxDataPoints": 2000
+            },
+            "transformations": []
+          }
+        },
+        "description": "",
+        "id": 2,
+        "links": [],
+        "title": "ADC vs sample",
+        "vizConfig": {
+          "group": "xychart",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 50,
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "pointShape": "circle",
+                  "pointSize": {
+                    "fixed": 5
+                  },
+                  "pointStrokeWidth": 1,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "show": "points"
+                },
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                }
+              },
+              "overrides": []
+            },
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "mapping": "manual",
+              "series": [
+                {
+                  "frame": {
+                    "matcher": {
+                      "id": "byIndex",
+                      "options": 0
+                    }
+                  },
+                  "x": {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "sample"
+                    }
+                  },
+                  "y": {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "ADC"
+                    }
+                  }
+                }
+              ],
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "single",
+                "sort": "none"
+              }
+            }
+          },
+          "version": "13.0.1"
+        }
+      }
+    }
+  },
+  "layout": {
+    "kind": "GridLayout",
+    "spec": {
+      "items": [
+        {
+          "kind": "GridLayoutItem",
+          "spec": {
+            "element": {
+              "kind": "ElementReference",
+              "name": "panel-2"
+            },
+            "height": 8,
+            "width": 12,
+            "x": 12,
+            "y": 0
+          }
+        }
+      ]
+    }
+  },
+  "links": [],
+  "liveNow": false,
+  "preferences": {
+    "layout": {
+      "kind": "GridLayout",
+      "spec": {
+        "items": []
+      }
+    }
+  },
+  "preload": false,
+  "tags": [],
+  "timeSettings": {
+    "autoRefresh": "5s",
+    "autoRefreshIntervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ],
+    "fiscalYearStartMonth": 0,
+    "from": "2026-04-15T13:49:40.676Z",
+    "hideTimepicker": false,
+    "timezone": "browser",
+    "to": "2026-04-15T13:49:40.676Z"
+  },
+  "title": "Digitiser",
+  "variables": [
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "allowCustomValue": true,
+        "current": {
+          "text": "1",
+          "value": "1"
+        },
+        "definition": "\nimport \"influxdata/influxdb/schema\"\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"run\"\n)\n",
+        "hide": "dontHide",
+        "includeAll": false,
+        "label": "run",
+        "multi": false,
+        "name": "run",
+        "options": [],
+        "query": {
+          "datasource": {
+            "name": "dfknm2xrwl05cd"
+          },
+          "group": "influxdb",
+          "kind": "DataQuery",
+          "spec": {
+            "query": "\nimport \"influxdata/influxdb/schema\"\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"run\"\n)\n"
+          },
+          "version": "v0"
+        },
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": "disabled"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "allowCustomValue": true,
+        "current": {
+          "text": "1776260783",
+          "value": "1776260783"
+        },
+        "definition": "\nimport \"influxdata/influxdb/schema\"\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"acq_id\",\n  predicate: (r) => r[\"run\"] == \"${run}\"\n)\n",
+        "hide": "dontHide",
+        "includeAll": false,
+        "label": "acq_id",
+        "multi": false,
+        "name": "acq_id",
+        "options": [],
+        "query": {
+          "datasource": {
+            "name": "afkg09ggnclq8f"
+          },
+          "group": "influxdb",
+          "kind": "DataQuery",
+          "spec": {
+            "query": "\nimport \"influxdata/influxdb/schema\"\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"acq_id\",\n  predicate: (r) => r[\"run\"] == \"${run}\"\n)\n"
+          },
+          "version": "v0"
+        },
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": "disabled"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "1"
+          ],
+          "value": [
+            "1"
+          ]
+        },
+        "definition": "\nimport \"influxdata/influxdb/schema\"\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"channel\",\n  predicate: (r) =>\n    r[\"run\"] == \"${run}\" and\n    r[\"acq_id\"] == \"${acq_id}\"\n)\n",
+        "hide": "dontHide",
+        "includeAll": false,
+        "label": "channel",
+        "multi": true,
+        "name": "channel",
+        "options": [],
+        "query": {
+          "datasource": {
+            "name": "afkg09ggnclq8f"
+          },
+          "group": "influxdb",
+          "kind": "DataQuery",
+          "spec": {
+            "query": "\nimport \"influxdata/influxdb/schema\"\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"channel\",\n  predicate: (r) =>\n    r[\"run\"] == \"${run}\" and\n    r[\"acq_id\"] == \"${acq_id}\"\n)\n"
+          },
+          "version": "v0"
+        },
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": "disabled"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "allowCustomValue": true,
+        "current": {
+          "text": [
+            "30001"
+          ],
+          "value": [
+            "30001"
+          ]
+        },
+        "definition": "\nimport \"influxdata/influxdb/schema\"\n\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"event\",\n  predicate: (r) =>\n    r[\"run\"] == \"${run}\" and\n    r[\"acq_id\"] == \"${acq_id}\" and\n    r[\"channel\"] == \"${channel}\"\n)\n",
+        "hide": "dontHide",
+        "includeAll": false,
+        "label": "event",
+        "multi": true,
+        "name": "event",
+        "options": [],
+        "query": {
+          "datasource": {
+            "name": "dfknm2xrwl05cd"
+          },
+          "group": "influxdb",
+          "kind": "DataQuery",
+          "spec": {
+            "query": "\nimport \"influxdata/influxdb/schema\"\n\nschema.tagValues(\n  bucket: \"Digitiser_bucket_abs\",\n  tag: \"event\",\n  predicate: (r) =>\n    r[\"run\"] == \"${run}\" and\n    r[\"acq_id\"] == \"${acq_id}\" and\n    r[\"channel\"] == \"${channel}\"\n)\n"
+          },
+          "version": "v0"
+        },
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": "disabled"
+      }
+    }
+  ]
+}
