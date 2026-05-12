@@ -4,6 +4,7 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 import csv
 import re
+import time
 
 # ============================================================
 # CONFIG
@@ -22,9 +23,9 @@ ENABLE_WAVE_PLOTTING = True
 
 # ---- InfluxDB ----
 INFLUX_URL = "http://localhost:8086"
-INFLUX_ORG = "TestBeam_org"
+INFLUX_ORG = "Newtile_Online-org"
 INFLUX_BUCKET = "Digitiser_bucket"
-INFLUX_TOKEN = "JevdaRydlGQv_xshNvghA45XoivlKYpfnmCUU43BkAKSRh8wQPT_nUbxwt3xEstUbJDOzK4SNd9Lz3GcdCV-1w=="
+INFLUX_TOKEN = "MreJPVJw6aNMicNfgRoV6Zx57qSX1L-aJ_m92kV_EeqAi6WN4XJTZnh-2PVbTwJJPrMqZyfKggTNYfShzvvhSQ=="
 
 # ---- Board ----
 FIXED_BOARD_ID = 31
@@ -89,7 +90,7 @@ def get_output_dir():
 # PARSE + DOWNSAMPLE MULTI-EVENT WAVEFORM FILE
 # ============================================================
 
-def parse_wave_file(path, write_api, acq_id, csv_dir=None):
+def parse_wave_file(path, write_api, acq_id, csv_dir=None, influx_counter=None):
 
     # ---------- filename metadata ----------
     board, channel = parse_filename_metadata(path)
@@ -99,6 +100,8 @@ def parse_wave_file(path, write_api, acq_id, csv_dir=None):
 
     with open(path) as f:
         lines = f.readlines()
+
+    print(f"Processing {path.name} - 0%")
 
     writer = None
     csv_file = None
@@ -119,6 +122,7 @@ def parse_wave_file(path, write_api, acq_id, csv_dir=None):
 
     i = 0
     n_lines = len(lines)
+    progress_counter = 0
 
     while i < n_lines:
 
@@ -161,12 +165,12 @@ def parse_wave_file(path, write_api, acq_id, csv_dir=None):
 
             # ---------- PROCESS EVENT ----------
             baseline = sum(adc_values[:BASELINE_SAMPLES]) / BASELINE_SAMPLES
-            decimation = compute_decimation(len(adc_values), MAX_PLOT_POINTS)
+            event_time_ns = time.time_ns()
 
-            for sample_idx in range(0, len(adc_values), decimation):
+            for sample_idx in range(len(adc_values)):
                 adc = adc_values[sample_idx]
                 adc_corr = adc - baseline
-                ts = sample_idx * SAMPLE_PERIOD_NS
+                ts = event_time_ns + sample_idx * SAMPLE_PERIOD_NS
 
                 if ENABLE_WAVE_PLOTTING:
                     p = (
@@ -180,26 +184,27 @@ def parse_wave_file(path, write_api, acq_id, csv_dir=None):
                         .field("sample_idx", sample_idx)
                         .time(ts)
                     )
-                    write_api.write(
-                        bucket=INFLUX_BUCKET,
-                        org=INFLUX_ORG,
-                        record=p
-                    )
-
-                if writer:
-                    writer.writerow([
-                        acq_id,
-                        board,
-                        channel,
-                        event_number,
-                        sample_idx,
-                        ts,
-                        adc,
-                        adc_corr
-                    ])
+                    try:
+                        write_api.write(
+                            bucket=INFLUX_BUCKET,
+                            org=INFLUX_ORG,
+                            record=p
+                        )
+                        if influx_counter is not None:
+                            influx_counter[0] += 1
+                    except Exception as e:
+                        print(
+                            f"[ERROR] Influx write failed for {path.name} "
+                            f"event={event_number} sample={sample_idx}: {e}"
+                        )
 
         else:
             i += 1
+
+        progress_counter += 1
+        if progress_counter % 50 == 0 or i == n_lines:
+            percent = (i / n_lines) * 100
+            print(f"Processing {path.name} - {percent:.1f}%")
 
     if csv_file:
         csv_file.close()
@@ -218,7 +223,13 @@ def main():
     for i, f in enumerate(event_folders):
         print(f"[{i}] {f.name}")
 
-    idx = int(input("Select event folder: "))
+    while True:
+        try:
+            idx = int(input("Select event folder: "))
+            break
+        except (ValueError, UnicodeDecodeError):
+            print("Invalid input. Please enter a valid number.")
+
     base = event_folders[idx]
     acq_id = base.name
 
@@ -226,10 +237,22 @@ def main():
     for i, w in enumerate(wave_blocks):
         print(f"[{i}] wave{w:010d}")
 
-    choice = input("Select wave block (or 'a'): ").strip().lower()
+    while True:
+        try:
+            choice = input("Select wave block (or 'a'): ").strip().lower()
+            break
+        except UnicodeDecodeError:
+            print("Invalid input encoding. Please try again.")
+
     blocks = wave_blocks if choice == "a" else [wave_blocks[int(choice)]]
 
-    ch = input("Select channel (0-7 or 'all'): ").strip().lower()
+    while True:
+        try:
+            ch = input("Select channel (0-7 or 'all'): ").strip().lower()
+            break
+        except UnicodeDecodeError:
+            print("Invalid input encoding. Please try again.")
+
     selected_channel = None if ch == "all" else int(ch)
 
     csv_dir = get_output_dir()
@@ -240,6 +263,7 @@ def main():
         org=INFLUX_ORG
     )
     write_api = influx.write_api(write_options=SYNCHRONOUS)
+    influx_counter = [0]
 
     for block in blocks:
         prefix = f"wave{block:010d}"
@@ -248,8 +272,7 @@ def main():
             if selected_channel is not None and file_ch != selected_channel:
                 continue
 
-            print("Processing", file.name)
-            parse_wave_file(file, write_api, acq_id, csv_dir)
+            parse_wave_file(file, write_api, acq_id, csv_dir, influx_counter)
 
     write_api.close()
     influx.close()
