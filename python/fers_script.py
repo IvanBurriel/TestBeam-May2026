@@ -3,6 +3,8 @@
 import struct
 import csv
 import re
+import time
+import threading
 from pathlib import Path
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 
@@ -10,12 +12,42 @@ from influxdb_client import InfluxDBClient, Point, WritePrecision
 # HELPERS
 # ============================================================
 
-def ask_run_number():
+def ask_run_from_available(datafiles_dir: Path):
+    """
+    Lists all available Run numbers and asks user to select one
+    """
+    # Find all Run*.*_list.dat files to get available runs
+    run_files = sorted(datafiles_dir.glob("Run*.*_list.dat"))
+    
+    if not run_files:
+        raise RuntimeError(f"No run files found in {datafiles_dir}")
+    
+    # Extract unique run numbers
+    available_runs = set()
+    for f in run_files:
+        m = re.search(r"Run(\d+)\.", f.name)
+        if m:
+            available_runs.add(int(m.group(1)))
+    
+    available_runs = sorted(available_runs)
+    
+    print("\n📁 Available Runs:")
+    for idx, run in enumerate(available_runs, 1):
+        print(f"  {idx}. Run {run}")
+    
     while True:
         try:
-            return int(input("Enter run number to analyze: ").strip())
+            choice = input("\nSelect run number or index: ").strip()
+            run_num = int(choice)
+            
+            if run_num in available_runs:
+                return run_num
+            elif 1 <= run_num <= len(available_runs):
+                return available_runs[run_num - 1]
+            else:
+                print(f"❌ Please select a valid option (1-{len(available_runs)} or a run number from the list)")
         except ValueError:
-            print("❌ Please enter a valid integer run number")
+            print("❌ Please enter a valid integer")
 
 def ask_percentage():
     while True:
@@ -43,13 +75,13 @@ DATAFILES_DIR = Path(
     "/eos/experiment/newtile/beamtests/26_05_t10/fers_daq/bin/DataFiles"
 )
 
-OUTPUT_CSV_TEMPLATE = "Run{run}.csv"
+OUTPUT_CSV_TEMPLATE = "/eos/experiment/newtile/beamtests/26_05_t10/prep/led/QC_grafana/fers_csv/Run{run}.csv"
 
 # -------- InfluxDB ----------
 INFLUX_URL = "http://localhost:8086"
-INFLUX_ORG = "TestBeam_org"
+INFLUX_ORG = "Newtile_Online-org"
 INFLUX_BUCKET = "Fers_bucket"
-INFLUX_TOKEN = "JevdaRydlGQv_xshNvghA45XoivlKYpfnmCUU43BkAKSRh8wQPT_nUbxwt3xEstUbJDOzK4SNd9Lz3GcdCV-1w=="
+INFLUX_TOKEN = "MreJPVJw6aNMicNfgRoV6Zx57qSX1L-aJ_m92kV_EeqAi6WN4XJTZnh-2PVbTwJJPrMqZyfKggTNYfShzvvhSQ=="
 
 # ============================================================
 # FORMAT DEFINITIONS
@@ -63,7 +95,7 @@ CHAN_HEADER_FMT  = "<B B"
 
 def main():
 
-    RUN_NUMBER = ask_run_number()
+    RUN_NUMBER = ask_run_from_available(DATAFILES_DIR)
 
     # --------------------------------------------------------
     # Find all subrun files
@@ -86,7 +118,7 @@ def main():
     # --------------------------------------------------------
 
     sampling_percentage = ask_percentage()
-    sampling_divisor = int(100 / sampling_percentage)
+    sampling_divisor = max(1, round(100 / sampling_percentage))
 
     OUTPUT_FILE = OUTPUT_CSV_TEMPLATE.format(run=RUN_NUMBER)
 
@@ -127,7 +159,7 @@ def main():
         # ====================================================
 
         time_epoch_ms = None
-        influx_counter = 0
+        event_counter = 0
 
         for input_file in input_files:
 
@@ -135,6 +167,34 @@ def main():
 
             data = input_file.read_bytes()
             offset = 0
+
+            # timeout config: seconds to wait for file growth before skipping
+            FILE_GROWTH_TIMEOUT = 720.0
+            FILE_GROWTH_POLL = 20.0
+
+            def ensure_bytes_available(required_offset, size):
+                nonlocal data
+                # if already available, return True
+                if required_offset + size <= len(data):
+                    return True
+
+                start = time.time()
+                last_size = len(data)
+                while True:
+                    try:
+                        file_size = input_file.stat().st_size
+                    except Exception:
+                        file_size = last_size
+
+                    if file_size > len(data):
+                        # file grew: re-read full data buffer
+                        data = input_file.read_bytes()
+                        return required_offset + size <= len(data)
+
+                    if time.time() - start > FILE_GROWTH_TIMEOUT:
+                        return False
+
+                    time.sleep(FILE_GROWTH_POLL)
 
             # ---------------- FILE HEADER (only for .0) --------------------
 
@@ -167,9 +227,18 @@ def main():
 
             # ---------------- EVENT LOOP --------------------
 
+            timed_out = False
             while offset < len(data):
 
                 ev_start = offset
+
+                # ensure event header available
+                hdr_size = struct.calcsize(EVENT_HEADER_FMT)
+                ok = ensure_bytes_available(offset, hdr_size)
+                if not ok:
+                    print(f"[TIMEOUT] no growth for {input_file.name}, moving to next subrun file")
+                    timed_out = True
+                    break
 
                 (
                     ev_size,
@@ -178,34 +247,62 @@ def main():
                     _dTRef,
                     Trg_Id,
                     _ch_mask,
-                    nhits
+                    nhits,
                 ) = struct.unpack_from(EVENT_HEADER_FMT, data, offset)
 
-                offset += struct.calcsize(EVENT_HEADER_FMT)
+                offset += hdr_size
 
-                timestamp_ns = int(
-                    time_epoch_ms * 1_000_000 + TStamp_us * 1_000
-                )
+                sample_this_event = (event_counter % sampling_divisor == 0)
+                event_counter += 1
+
+                timestamp_ns = int(time_epoch_ms * 1_000_000 + TStamp_us * 1_000)
 
                 for _ in range(nhits):
 
+                    # ensure channel header available
+                    ch_hdr_size = struct.calcsize(CHAN_HEADER_FMT)
+                    ok = ensure_bytes_available(offset, ch_hdr_size)
+                    if not ok:
+                        print(f"[TIMEOUT] no growth while reading hit header in {input_file.name}")
+                        timed_out = True
+                        break
+
                     ch, dtype = struct.unpack_from(CHAN_HEADER_FMT, data, offset)
-                    offset += 2
+                    offset += ch_hdr_size
 
                     LG = HG = ToA = ToT = None
 
                     if dtype & 0x01:
+                        ok = ensure_bytes_available(offset, 2)
+                        if not ok:
+                            timed_out = True
+                            break
                         LG = struct.unpack_from("<H", data, offset)[0]
                         offset += 2
                     if dtype & 0x02:
+                        ok = ensure_bytes_available(offset, 2)
+                        if not ok:
+                            timed_out = True
+                            break
                         HG = struct.unpack_from("<H", data, offset)[0]
                         offset += 2
                     if dtype & 0x10:
+                        ok = ensure_bytes_available(offset, 4)
+                        if not ok:
+                            timed_out = True
+                            break
                         ToA = struct.unpack_from("<f", data, offset)[0]
                         offset += 4
                     if dtype & 0x20:
+                        ok = ensure_bytes_available(offset, 4)
+                        if not ok:
+                            timed_out = True
+                            break
                         ToT = struct.unpack_from("<f", data, offset)[0]
                         offset += 4
+
+                    if timed_out:
+                        break
 
                     if dtype == 0:
                         continue
@@ -221,13 +318,13 @@ def main():
                         LG,
                         HG,
                         ToA,
-                        ToT
+                        ToT,
                     ])
 
                     csvfile.flush()
 
                     # ---------------- Influx ----------------
-                    if influx_counter % sampling_divisor == 0:
+                    if sample_this_event:
                         p = (
                             Point("fers_hits")
                             .tag("run", str(RUN_NUMBER))
@@ -242,26 +339,66 @@ def main():
                             .time(timestamp_ns, WritePrecision.NS)
                         )
 
-                        p._fields = {
-                            k: v for k, v in p._fields.items()
-                            if v is not None
-                        }
+                        p._fields = {k: v for k, v in p._fields.items() if v is not None}
+                        write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=p)
 
-                        write_api.write(
-                            bucket=INFLUX_BUCKET,
-                            org=INFLUX_ORG,
-                            record=p
-                        )
+                if timed_out:
+                    break
 
-                    influx_counter += 1
-
-                    write_api.write(
-                        bucket=INFLUX_BUCKET,
-                        org=INFLUX_ORG,
-                        record=p
-                    )
+                # throttle: small sleep every 10 events to avoid outrunning DAQ
+                if event_counter % 10 == 0:
+                    time.sleep(0.001)
 
                 offset = ev_start + ev_size
+
+            if timed_out:
+                # move to next file
+                continue
+
+        # ====================================================
+        # After all current subrun files: wait for more parts
+        # ====================================================
+
+        print("\n[WAITING] All current files processed. Watching for new data...")
+        print("[INFO] Press 's' to stop waiting and exit, or wait for more .*_list.dat files...")
+
+        user_stop = threading.Event()
+
+        def wait_for_input():
+            while not user_stop.is_set():
+                try:
+                    user_input = input().strip().lower()
+                    if user_input == 's':
+                        user_stop.set()
+                except EOFError:
+                    pass
+
+        input_thread = threading.Thread(target=wait_for_input, daemon=True)
+        input_thread.start()
+
+        wait_timeout = FILE_GROWTH_TIMEOUT
+        wait_start = time.time()
+        last_file_count = len(input_files)
+
+        while not user_stop.is_set():
+            # check if new files appeared
+            new_files = sorted(
+                DATAFILES_DIR.glob(f"Run{RUN_NUMBER}.*_list.dat"),
+                key=extract_subrun_number
+            )
+
+            if len(new_files) > last_file_count:
+                print(f"[NEW FILE] Detected new subrun files! Resuming...")
+                input_files = new_files
+                break
+
+            if time.time() - wait_start > wait_timeout:
+                print(f"[TIMEOUT] No new files for {wait_timeout}s. Exiting...")
+                break
+
+            time.sleep(FILE_GROWTH_POLL)
+
+        user_stop.set()
 
     # ========================================================
     # CLEAN SHUTDOWN
